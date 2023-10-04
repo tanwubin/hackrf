@@ -125,6 +125,7 @@ static usb_request_handler_fn vendor_request_handler[] = {
 	usb_vendor_request_read_board_rev,
 	usb_vendor_request_read_supported_platform,
 	usb_vendor_request_set_leds,
+	usb_vendor_request_user_config_set_bias_t_opts,
 };
 
 static const uint32_t vendor_request_handler_count =
@@ -288,7 +289,11 @@ int main(void)
 	}
 	operacake_init(operacake_allow_gpio);
 
-	clkin_detect_init();
+	// FIXME: clock detection on r9 only works when calling init twice
+	if (detected_platform() == BOARD_ID_HACKRF1_R9) {
+		clkin_detect_init();
+		clkin_detect_init();
+	}
 
 	while (true) {
 		transceiver_request_t request;

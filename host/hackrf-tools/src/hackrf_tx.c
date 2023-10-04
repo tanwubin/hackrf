@@ -3,12 +3,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-
 #define FREQ  900000000
 
-
 hackrf_device* device = NULL;
-
 unsigned char* mbuffer = "012345678901234567890123456789";
 
 void init_hackrf()
@@ -26,7 +23,8 @@ void init_hackrf()
 	printf("HACKRF init done.\n");
 }
 
-int _hackrf_tx_callback(hackrf_transfer *transfer) {
+int _hackrf_tx_callback(hackrf_transfer *transfer) 
+{
 	printf("transfer->valid_length is %d\n", transfer->valid_length);
 	// memcpy(transfer->buffer,mbuffer,transfer->valid_length);
 	if (strlen(mbuffer) >= transfer->valid_length) {

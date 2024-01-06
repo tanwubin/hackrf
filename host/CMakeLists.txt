@@ -3,6 +3,7 @@
 cmake_minimum_required(VERSION 2.8)
 project (HackRF C)
 
+set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_FLAGS "$ENV{CFLAGS}" CACHE STRING "C Flags")
 
 add_subdirectory(libhackrf)
@@ -21,3 +22,4 @@ configure_file(
 add_custom_target(uninstall
     ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake
 )
+

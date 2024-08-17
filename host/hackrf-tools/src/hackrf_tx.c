@@ -37,7 +37,8 @@ int _hackrf_tx_callback(hackrf_transfer* transfer)
 
 int main(void)
 {
-	for (int i = 0; i < 100; i++) {
+	int i;
+	for (i = 0; i < 100; i++) {
 		init_hackrf();
 		hackrf_start_tx(device, _hackrf_tx_callback, NULL);
 		hackrf_stop_tx(device);

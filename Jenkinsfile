@@ -1,23 +1,23 @@
 pipeline {
-    agent {
-        dockerfile {
-            args '--group-add=46 --device-cgroup-rule="c 189:* rmw" -v /dev/bus/usb:/dev/bus/usb'
-        }
-    }
+    agent any
     stages {
-        stage('Build (Host)') {
+        stage('Build Docker Image') {
+            steps {
+                sh 'docker build -t hackrf https://github.com/greatscottgadgets/hackrf.git'
+            }
+        }
+        stage('Test Suite') {
+            agent {
+                docker {
+                    image 'hackrf'
+                    reuseNode true
+                    args '--group-add=20 --group-add=46 --device-cgroup-rule="c 189:* rmw" --device-cgroup-rule="c 166:* rmw" -v /dev/bus/usb:/dev/bus/usb -e TESTER=0000000000000000325866e629a25623 -e EUT=RunningFromRAM'
+                }
+            }
             steps {
                 sh './ci-scripts/install-host.sh'
-            }
-        }
-        stage('Build (Firmware)') {
-            steps {
                 sh './ci-scripts/install-firmware.sh'
-            }
-        }
-        stage('Test') {
-            steps {
-                sh './ci-scripts/configure-hubs.sh --off'
+                sh 'hubs all off'
                 retry(3) {
                     sh './ci-scripts/test-host.sh'
                 }
@@ -26,15 +26,20 @@ pipeline {
                 }
                 sh './ci-scripts/test-firmware-flash.sh'
                 sh 'python3 ci-scripts/test-debug.py'
-                sh 'python3 ci-scripts/test-transfer.py tx'
-                sh 'python3 ci-scripts/test-transfer.py rx'
+                retry(3) {
+                    sh 'python3 ci-scripts/test-transfer.py tx'
+                }
+                retry(3) {
+                    sh 'python3 ci-scripts/test-transfer.py rx'
+                }
+                sh 'hubs all off'
+                sh 'python3 ci-scripts/test-sgpio-debug.py'
+                sh 'hubs all reset'
             }
         }
     }
     post {
         always {
-            sh './ci-scripts/configure-hubs.sh --reset'
-            sh 'rm -rf testing-venv/'
             cleanWs(cleanWhenNotBuilt: false,
                     deleteDirs: true,
                     disableDeferredWipeout: true,

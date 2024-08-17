@@ -6,6 +6,7 @@
 *.srec
 host/build/
 host/**/build
+install/
 build
 
 # Operating system spew

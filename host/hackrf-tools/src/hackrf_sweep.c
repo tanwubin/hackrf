@@ -47,6 +47,7 @@ typedef int bool;
 #ifdef _WIN32
 	#define _USE_MATH_DEFINES
 	#include <windows.h>
+	#include <io.h>
 	#ifdef _MSC_VER
 
 		#ifdef _WIN64
@@ -184,6 +185,7 @@ uint32_t amp_enable;
 bool antenna = false;
 uint32_t antenna_enable;
 
+bool timestamp_normalized = false;
 bool binary_output = false;
 bool ifft_output = false;
 bool one_shot = false;
@@ -201,6 +203,8 @@ fftwf_plan ifftwPlan = NULL;
 uint32_t ifft_idx = 0;
 float* pwr;
 float* window;
+
+struct timeval usb_transfer_time;
 
 float logPower(fftwf_complex in, float scale)
 {
@@ -220,7 +224,6 @@ int rx_callback(hackrf_transfer* transfer)
 	int i, j, ifft_bins;
 	struct tm* fft_time;
 	char time_str[50];
-	struct timeval usb_transfer_time;
 
 	if (NULL == outfile) {
 		return -1;
@@ -229,7 +232,14 @@ int rx_callback(hackrf_transfer* transfer)
 	if (do_exit) {
 		return 0;
 	}
-	gettimeofday(&usb_transfer_time, NULL);
+
+	// happens only once with timestamp_normalized == true
+	if ((usb_transfer_time.tv_sec == 0 && usb_transfer_time.tv_usec == 0) ||
+	    timestamp_normalized == false) {
+		// set the timestamp for the first sweep
+		gettimeofday(&usb_transfer_time, NULL);
+	}
+
 	byte_count += transfer->valid_length;
 	buf = (int8_t*) transfer->buffer;
 	ifft_bins = fftSize * step_count;
@@ -265,6 +275,12 @@ int rx_callback(hackrf_transfer* transfer)
 					}
 				}
 				sweep_count++;
+
+				if (timestamp_normalized == true) {
+					// set the timestamp of the next sweep
+					gettimeofday(&usb_transfer_time, NULL);
+				}
+
 				if (one_shot) {
 					do_exit = true;
 				} else if (finite_mode && sweep_count == num_sweeps) {
@@ -381,10 +397,13 @@ static void usage()
 		"\t[-l gain_db] # RX LNA (IF) gain, 0-40dB, 8dB steps\n"
 		"\t[-g gain_db] # RX VGA (baseband) gain, 0-62dB, 2dB steps\n"
 		"\t[-w bin_width] # FFT bin width (frequency resolution) in Hz, 2445-5000000\n"
+		"\t[-W wisdom_file] # Use FFTW wisdom file (will be created if necessary)\n"
+		"\t[-P estimate|measure|patient|exhaustive] # FFTW plan type, default is 'measure'\n"
 		"\t[-1] # one shot mode\n"
 		"\t[-N num_sweeps] # Number of sweeps to perform\n"
 		"\t[-B] # binary output\n"
 		"\t[-I] # binary inverse FFT output\n"
+		"\t[-n] # keep the same timestamp within a sweep\n"
 		"\t-r filename # output file\n"
 		"\n"
 		"Output fields:\n"
@@ -411,6 +430,36 @@ void sigint_callback_handler(int signum)
 }
 #endif
 
+int import_wisdom(const char* path)
+{
+	// Returns nonzero
+	if (!fftwf_import_wisdom_from_filename(path)) {
+		fprintf(stderr,
+			"Wisdom file %s not found; will attempt to create it\n",
+			path);
+		return 0;
+	}
+
+	return 1;
+}
+
+int import_default_wisdom()
+{
+	return fftwf_import_system_wisdom();
+}
+
+int export_wisdom(const char* path)
+{
+	if (path != NULL) {
+		if (!fftwf_export_wisdom_to_filename(path)) {
+			fprintf(stderr, "Could not write FFTW wisdom file to %s", path);
+			return 0;
+		}
+	}
+
+	return 1;
+}
+
 int main(int argc, char** argv)
 {
 	int opt, i, result = 0;
@@ -425,8 +474,10 @@ int main(int argc, char** argv)
 	uint32_t freq_min = 0;
 	uint32_t freq_max = 6000;
 	uint32_t requested_fft_bin_width;
+	const char* fftwWisdomPath = NULL;
+	int fftw_plan_type = FFTW_MEASURE;
 
-	while ((opt = getopt(argc, argv, "a:f:p:l:g:d:n:N:w:1BIr:h?")) != EOF) {
+	while ((opt = getopt(argc, argv, "a:f:p:l:g:d:N:w:W:P:n1BIr:h?")) != EOF) {
 		result = HACKRF_SUCCESS;
 		switch (opt) {
 		case 'd':
@@ -488,6 +539,29 @@ int main(int argc, char** argv)
 			fftSize = DEFAULT_SAMPLE_RATE_HZ / requested_fft_bin_width;
 			break;
 
+		case 'W':
+			fftwWisdomPath = optarg;
+			break;
+
+		case 'P':
+			if (strcmp("estimate", optarg) == 0) {
+				fftw_plan_type = FFTW_ESTIMATE;
+			} else if (strcmp("measure", optarg) == 0) {
+				fftw_plan_type = FFTW_MEASURE;
+			} else if (strcmp("patient", optarg) == 0) {
+				fftw_plan_type = FFTW_PATIENT;
+			} else if (strcmp("exhaustive", optarg) == 0) {
+				fftw_plan_type = FFTW_EXHAUSTIVE;
+			} else {
+				fprintf(stderr, "Unknown FFTW plan type '%s'\n", optarg);
+				return EXIT_FAILURE;
+			}
+			break;
+
+		case 'n':
+			timestamp_normalized = true;
+			break;
+
 		case '1':
 			one_shot = true;
 			break;
@@ -525,6 +599,14 @@ int main(int argc, char** argv)
 			usage();
 			return EXIT_FAILURE;
 		}
+	}
+
+	// Try to load a wisdom file if specified, otherwise
+	// try to load the system-wide wisdom file
+	if (fftwWisdomPath) {
+		import_wisdom(fftwWisdomPath);
+	} else {
+		import_default_wisdom();
 	}
 
 	if (lna_gain % 8) {
@@ -607,12 +689,20 @@ int main(int argc, char** argv)
 	fftwIn = (fftwf_complex*) fftwf_malloc(sizeof(fftwf_complex) * fftSize);
 	fftwOut = (fftwf_complex*) fftwf_malloc(sizeof(fftwf_complex) * fftSize);
 	fftwPlan =
-		fftwf_plan_dft_1d(fftSize, fftwIn, fftwOut, FFTW_FORWARD, FFTW_MEASURE);
+		fftwf_plan_dft_1d(fftSize, fftwIn, fftwOut, FFTW_FORWARD, fftw_plan_type);
 	pwr = (float*) fftwf_malloc(sizeof(float) * fftSize);
 	window = (float*) fftwf_malloc(sizeof(float) * fftSize);
 	for (i = 0; i < fftSize; i++) {
 		window[i] = (float) (0.5f * (1.0f - cos(2 * M_PI * i / (fftSize - 1))));
 	}
+
+	/* Execute the plan once to make sure it's ready to go when real
+	 * data starts to flow.  See issue #1366
+	*/
+	fftwf_execute(fftwPlan);
+
+	// reset the timestamp
+	memset(&usb_transfer_time, 0, sizeof(usb_transfer_time));
 
 #ifdef _MSC_VER
 	if (binary_output) {
@@ -725,7 +815,12 @@ int main(int argc, char** argv)
 			ifftwIn,
 			ifftwOut,
 			FFTW_BACKWARD,
-			FFTW_MEASURE);
+			fftw_plan_type);
+
+		/* Execute the plan once to make sure it's ready to go when real
+	 	 * data starts to flow.  See issue #1366
+		*/
+		fftwf_execute(ifftwPlan);
 	}
 
 	result = hackrf_init_sweep(
@@ -858,6 +953,7 @@ int main(int argc, char** argv)
 	fftwf_free(window);
 	fftwf_free(ifftwIn);
 	fftwf_free(ifftwOut);
+	export_wisdom(fftwWisdomPath);
 	fprintf(stderr, "exit\n");
 	return exit_code;
 }
